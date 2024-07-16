@@ -19,6 +19,7 @@ import Element.Border
 import Element.Font
 import Element.Input
 import Html
+import Html.Attributes
 import Json.Decode
 import Json.Encode
 import Loading
@@ -33,32 +34,6 @@ font =
         ]
 
 
-btcRuinModelEncoder : BTCRuinModel -> Json.Encode.Value
-btcRuinModelEncoder bTCRuinModel =
-    Json.Encode.object
-        [ ( "btcAddress"
-          , Json.Encode.string
-                (case bTCRuinModel.btcAddress of
-                    Just btcAddress ->
-                        btcAddress
-
-                    Nothing ->
-                        ""
-                )
-          )
-        , ( "radAmount"
-          , (BigInt.toString >> Json.Encode.string)
-                (case bTCRuinModel.radAmount of
-                    Just radAmount ->
-                        radAmount
-
-                    Nothing ->
-                        BigInt.fromInt 0
-                )
-          )
-        ]
-
-
 type alias NetworkSubdomain =
     String
 
@@ -66,45 +41,16 @@ type alias NetworkSubdomain =
 type Msg
     = ConnectW ConnectWallet.Msg
     | Login
-    | EnterRADAmount String
-    | CantSubmit
-    | Submit NetworkSubdomain
-    | ReceiveSubmitAddressAndSendRAD String
-    | ReceiveAmountOfRad Int
-    | CheckCheckbox Bool
+    | ReceiveLogin Bool
+    | ShowRepo
     | NoOp
-
-
-initialBTCRuinModel : BTCRuinModel
-initialBTCRuinModel =
-    { btcAddress = Nothing
-    , radAmount = Nothing
-    , totalAmountOfRadInWallet = Nothing
-    , radAmountError = Nothing
-    , btcAddressError = Nothing
-    , iAcknowledge = False
-    , iAcknowledgeError = Nothing
-    , transactionError = Nothing
-    }
-
-
-type alias BTCRuinModel =
-    { btcAddress : Maybe String
-    , radAmount : Maybe BigInt.BigInt
-    , totalAmountOfRadInWallet : Maybe BigInt.BigInt
-    , radAmountError : Maybe String
-    , btcAddressError : Maybe String
-    , iAcknowledge : Bool
-    , iAcknowledgeError : Maybe String
-    , transactionError : Maybe String
-    }
 
 
 type Model
     = WalletState String ConnectWallet.Model
-    | Connected NetworkSubdomain ConnectWallet.Model BTCRuinModel
-    | Submitting NetworkSubdomain ConnectWallet.Model BTCRuinModel
-    | Submitted NetworkSubdomain String
+    | Connected NetworkSubdomain ConnectWallet.Model (List String)
+    | LoggedIn NetworkSubdomain ConnectWallet.Model (List String)
+    | RepoDetail NetworkSubdomain ConnectWallet.Model (List String)
     | NoAda
     | NullState
 
@@ -198,8 +144,9 @@ update msg model =
                 ConnectWallet.ConnectionEstablished _ _ _ _ ->
                     ( Connected networkSubdomain
                         newWalletModel
-                        initialBTCRuinModel
-                    , getAmountOfRad ()
+                        [ "darcshub"
+                        ]
+                    , Cmd.none
                     )
 
                 _ ->
@@ -209,162 +156,18 @@ update msg model =
 
         ( Login, Connected networkSubdomain walletModel btcRuinModel ) ->
             ( Connected networkSubdomain walletModel btcRuinModel
+            , login ()
+            )
+
+        ( ShowRepo, LoggedIn networkSubdomain walletModel btcRuinModel ) ->
+            ( RepoDetail networkSubdomain walletModel btcRuinModel
             , Cmd.none
             )
 
-        ( EnterRADAmount radAmountString, Connected networkSubdomain walletModel btcRuinModel ) ->
-            let
-                newBtcRuinModel =
-                    { btcRuinModel
-                        | radAmount = BigInt.fromIntString radAmountString
-                    }
-
-                newerBtcRuinModel =
-                    { newBtcRuinModel
-                        | radAmountError =
-                            if newBtcRuinModel.radAmount == Nothing then
-                                Just "no RAD input"
-
-                            else
-                                case Maybe.map2 BigInt.gt btcRuinModel.radAmount btcRuinModel.totalAmountOfRadInWallet of
-                                    Just True ->
-                                        Just "not enough RAD"
-
-                                    _ ->
-                                        Nothing
-                    }
-            in
-            ( Connected networkSubdomain walletModel newerBtcRuinModel
+        ( ReceiveLogin loggedIn, Connected networkSubdomain walletModel btcRuinModel ) ->
+            ( LoggedIn networkSubdomain walletModel btcRuinModel
             , Cmd.none
             )
-
-        ( Submit networkSubdomain, Connected _ walletModel btcRuinModel ) ->
-            ( Submitting networkSubdomain walletModel btcRuinModel
-            , submitAddressAndSendRAD (btcRuinModelEncoder btcRuinModel)
-            )
-
-        ( ReceiveSubmitAddressAndSendRAD resultJson, Submitting networkSubdomain walletModel btcRuinModel ) ->
-            let
-                result =
-                    Json.Decode.decodeString Json.Decode.string resultJson
-            in
-            case result of
-                Ok r ->
-                    let
-                        error =
-                            determineTransactionError r
-                    in
-                    case error of
-                        Declined ->
-                            ( Connected networkSubdomain walletModel btcRuinModel
-                            , Cmd.none
-                            )
-
-                        InputsExhausted ->
-                            let
-                                newBtcRuinModel =
-                                    { btcRuinModel
-                                        | transactionError =
-                                            Just
-                                                (transactionErrorMessage InputsExhausted)
-                                    }
-                            in
-                            ( Connected networkSubdomain walletModel newBtcRuinModel
-                            , Cmd.none
-                            )
-
-                        _ ->
-                            let
-                                newBtcRuinModel =
-                                    { btcRuinModel
-                                        | transactionError = Just "Over budget"
-                                    }
-                            in
-                            ( Connected networkSubdomain walletModel newBtcRuinModel
-                            , Cmd.none
-                            )
-
-                Err e ->
-                    let
-                        tError =
-                            determineTransactionError (Json.Decode.errorToString e)
-
-                        newBtcRuinModel =
-                            { btcRuinModel
-                                | transactionError =
-                                    Just
-                                        (transactionErrorMessage tError)
-                            }
-                    in
-                    ( Connected networkSubdomain walletModel newBtcRuinModel
-                    , Cmd.none
-                    )
-
-        ( ReceiveAmountOfRad tAmountOfRadInWallet, Connected networkSubdomain walletModel btcRuinModel ) ->
-            let
-                newBtcRuinModel =
-                    { btcRuinModel
-                        | totalAmountOfRadInWallet = Just (BigInt.fromInt tAmountOfRadInWallet)
-                    }
-            in
-            ( Connected networkSubdomain walletModel newBtcRuinModel, Cmd.none )
-
-        ( CheckCheckbox value, Connected networkSubdomain walletModel btcRuinModel ) ->
-            let
-                newBtcRuinModel =
-                    { btcRuinModel
-                        | iAcknowledge = value
-                        , iAcknowledgeError =
-                            if value == True then
-                                Nothing
-
-                            else
-                                Just "must acknowledge"
-                    }
-            in
-            ( Connected networkSubdomain walletModel newBtcRuinModel, Cmd.none )
-
-        ( CantSubmit, Connected networkSubdomain walletModel btcRuinModel ) ->
-            let
-                newerBtcRuinModel =
-                    { btcRuinModel
-                        | iAcknowledgeError =
-                            if btcRuinModel.iAcknowledge == False then
-                                Just "must acknowledge"
-
-                            else
-                                Nothing
-                        , btcAddressError =
-                            if btcRuinModel.btcAddress == Nothing then
-                                Just "BTC address length wrong"
-
-                            else
-                                Maybe.andThen
-                                    (\btcAddress ->
-                                        if
-                                            String.length btcAddress
-                                                > 0
-                                        then
-                                            Nothing
-
-                                        else
-                                            Just "BTC address length wrong"
-                                    )
-                                    btcRuinModel.btcAddress
-                        , radAmountError =
-                            if btcRuinModel.radAmount == Nothing then
-                                Just "no RAD input"
-
-                            else
-                                case Maybe.map2 BigInt.gt btcRuinModel.radAmount btcRuinModel.totalAmountOfRadInWallet of
-                                    Just True ->
-                                        Just "not enough RAD"
-
-                                    _ ->
-                                        Nothing
-                    }
-            in
-            ( Connected networkSubdomain walletModel newerBtcRuinModel, Cmd.none )
 
         _ ->
             ( model, Cmd.none )
@@ -406,34 +209,35 @@ view fontColor model =
                         }
                     ]
 
-            Submitting _ _ _ ->
-                Element.el
-                    [ Element.centerX
-                    , Element.centerY
-                    ]
-                    (Loading.render Loading.Sonar Loading.defaultConfig Loading.On
-                        |> Element.html
+            LoggedIn networkSubdomain walletModel btcRuinModel ->
+                Element.column []
+                    (List.map
+                        (\repo ->
+                            Element.Input.button []
+                                { onPress = Just ShowRepo
+                                , label = Element.text repo
+                                }
+                        )
+                        [ "darcshub"
+                        ]
                     )
 
-            Submitted networkSubdomain txHash ->
+            RepoDetail networkSubdomain walletModel btcRuinModel ->
                 Element.column
                     [ Element.centerX
                     , Element.centerY
-                    , Element.spacing 30
+                    , Element.spacing 50
                     ]
-                    [ Element.el
-                        [ Element.centerX
-                        , Element.centerY
-                        ]
-                        (Element.newTabLink
-                            [ Element.mouseOver
-                                [ Element.Border.glow buttonHoverColor
-                                    10
-                                ]
+                    [ Element.html
+                        (Html.iframe
+                            [ Html.Attributes.sandbox "allow-popups allow-forms allow-scripts allow-same-origin"
+                            , Html.Attributes.src
+                                "https://sparkling-mud-0507.iagon.io/"
+                            , Html.Attributes.style "width" "100%"
+                            , Html.Attributes.style "height" "100%"
+                            , Html.Attributes.attribute "frameBorder" "0"
                             ]
-                            { url = "https://" ++ networkSubdomain ++ "cexplorer.io/tx/" ++ txHash
-                            , label = Element.text txHash
-                            }
+                            []
                         )
                     ]
 
@@ -465,10 +269,8 @@ subscriptions model =
             Sub.map ConnectW (ConnectWallet.subscriptions walletModel)
 
         Connected _ _ _ ->
-            receiveAmountOfRad ReceiveAmountOfRad
-
-        Submitting _ _ _ ->
-            receiveSubmitAddressAndSendRAD ReceiveSubmitAddressAndSendRAD
+            receiveLogin
+                ReceiveLogin
 
         _ ->
             Sub.none
@@ -485,13 +287,7 @@ main =
         }
 
 
-port submitAddressAndSendRAD : Json.Encode.Value -> Cmd msg
+port login : () -> Cmd msg
 
 
-port receiveSubmitAddressAndSendRAD : (String -> msg) -> Sub msg
-
-
-port getAmountOfRad : () -> Cmd msg
-
-
-port receiveAmountOfRad : (Int -> msg) -> Sub msg
+port receiveLogin : (Bool -> msg) -> Sub msg

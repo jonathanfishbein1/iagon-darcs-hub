@@ -38,3 +38,37 @@ app.ports.connectWallet.subscribe(async supportedWallet => {
     }
 })
 
+app.ports.login.subscribe(async () => {
+    try {
+        console.log('in login')
+        const
+            address = await lucid.wallet.address(),
+            payload = fromText('darcs hub login')
+        const message =
+            await lucid
+                .newMessage(
+                    address
+                    , payload
+                )
+
+        const signedMessage = await message.sign()
+
+
+
+        const hasSigned =
+            lucid
+                .verifyMessage(
+                    address
+                    , payload
+                    , signedMessage
+                    ,
+                )
+        console.log('hasSigned ', hasSigned)
+        console.log('app.ports ', app.ports)
+        app.ports.receiveLogin.send(hasSigned)
+    }
+    catch (err) {
+        console.log('err ', err)
+        app.ports.receiveLogin.send(false)
+    }
+})
